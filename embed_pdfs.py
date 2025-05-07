@@ -7,12 +7,12 @@ from openai import OpenAI
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-index = pc.Index("vihaan-chatbot")
+index = pc.Index("naveen-chatbot")
 
 MODEL = "text-embedding-ada-002"
 CHUNK_SIZE = 800  # chars (not tokens)
 
-DOCS_DIR = "docs"  # your folder of PDFs
+DOCS_DIR = "data"  # your folder of PDFs
 
 
 def extract_chunks(pdf_path):

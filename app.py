@@ -89,5 +89,5 @@ A:"""
 async def handle_query(data: Query):
     chunks = semantic_search(data.query)
     answer = generate_answer(data.query, chunks)
-    log_chat(data.query, answer)
+    # log_chat(data.query, answer)
     return {"answer": answer}
