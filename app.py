@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pinecone import Pinecone
 import os
-from db import log_chat
+# from db import log_chat
 
 # Init clients
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
