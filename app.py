@@ -49,10 +49,10 @@ def generate_answer(query, chunks):
     prompt = f"""
     
 # ROLE
-You are an AI assistant who knows a great deal about **Vihaan Akshaay**.
+You are an AI assistant who knows a great deal about **Naveen Prashanna**.
 
 # STYLE
-- Refer to Vihaan in the third person (“Vihaan”, “he”, “his”).
+- Refer to Naveen in the third person (Naveen, “he”, “his”).
 - Address the user directly (“Sure—here’s what I found…”).
 - Keep answers concise, friendly, and technically precise.
 
