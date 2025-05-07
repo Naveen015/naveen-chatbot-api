@@ -9,7 +9,7 @@ import os
 # Init clients
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-index = pc.Index("vihaan-chatbot")
+index = pc.Index("naveen-chatbot")
 
 # Constants
 EMBED_MODEL = "text-embedding-ada-002"
