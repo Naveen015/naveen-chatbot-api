@@ -19,7 +19,7 @@ class LLMProviderManager:
         
         # OpenAI config
         self.openai_key = os.getenv("OPENAI_API_KEY")
-        self.openai_default_model = os.getenv("OPENAI_MODEL", "gpt-4")
+        self.openai_default_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         self.openai_mini_model = os.getenv("OPENAI_MINI_MODEL", "gpt-4o-mini")
         
         # Local vLLM config

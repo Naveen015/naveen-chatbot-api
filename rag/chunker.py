@@ -67,16 +67,65 @@ class DocumentChunker:
         doc.close()
         return chunks
 
+    def extract_chunks_from_markdown(self, md_path: str) -> List[Dict[str, Any]]:
+        """
+        Parses a Markdown file and creates overlapping chunks with rich metadata.
+        """
+        if not os.path.exists(md_path):
+            raise FileNotFoundError(f"Markdown file not found at path: {md_path}")
+
+        filename = os.path.basename(md_path)
+        with open(md_path, 'r', encoding='utf-8') as f:
+            raw_text = f.read()
+
+        cleaned = self.clean_text(raw_text)
+        chunks = []
+        if len(cleaned) < self.min_chunk_len:
+            return chunks
+
+        start = 0
+        global_chunk_idx = 0
+        while start < len(cleaned):
+            end = start + self.chunk_size
+            chunk_text = cleaned[start:end]
+
+            if end < len(cleaned):
+                last_punct = max(chunk_text.rfind('. '), chunk_text.rfind('? '), chunk_text.rfind('! '))
+                if last_punct != -1 and last_punct > (self.chunk_size // 2):
+                    end = start + last_punct + 1
+                    chunk_text = cleaned[start:end]
+
+            chunk_text = chunk_text.strip()
+            if len(chunk_text) >= self.min_chunk_len:
+                chunk_id = f"{filename}_p1_c{global_chunk_idx}"
+                chunks.append({
+                    "id": chunk_id,
+                    "source": filename,
+                    "page": 1,
+                    "content": chunk_text,
+                    "char_count": len(chunk_text)
+                })
+                global_chunk_idx += 1
+
+            start += (self.chunk_size - self.overlap)
+
+        return chunks
+
     def process_directory(self, docs_dir: str) -> List[Dict[str, Any]]:
-        """Processes all PDF files in a given directory."""
+        """Processes all PDF and Markdown files in a given directory."""
         all_chunks = []
         if not os.path.exists(docs_dir):
             return all_chunks
 
-        pdf_files = [f for f in os.listdir(docs_dir) if f.endswith('.pdf')]
-        for pdf_file in pdf_files:
-            full_path = os.path.join(docs_dir, pdf_file)
-            chunks = self.extract_chunks_from_pdf(full_path)
+        files = [f for f in os.listdir(docs_dir) if f.endswith('.pdf') or f.endswith('.md')]
+        for f_name in sorted(files):
+            full_path = os.path.join(docs_dir, f_name)
+            if f_name.endswith('.pdf'):
+                chunks = self.extract_chunks_from_pdf(full_path)
+            elif f_name.endswith('.md'):
+                chunks = self.extract_chunks_from_markdown(full_path)
+            else:
+                chunks = []
             all_chunks.extend(chunks)
 
         return all_chunks
