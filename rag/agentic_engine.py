@@ -26,28 +26,68 @@ class AgenticRAGEngine:
         """Switches active LLM provider dynamically (e.g. 'openai' vs 'vllm')."""
         self.provider_manager.set_provider(provider, model_name)
 
-    def decompose_and_rewrite_query(self, query: str) -> Dict[str, Any]:
+    def check_casual_intent(self, query: str) -> Optional[str]:
         """
-        Analyzes the query, expands terms for keyword/vector search, and splits multi-part questions.
+        Fast rule-based check for common greetings, introductions, and casual remarks.
+        """
+        q_clean = query.strip().lower().rstrip("!.,?")
+        greetings = {"hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening", "yo", "sup", "hi there", "hello there"}
+        intros = {"who are you", "who are you?", "what is your name", "what's your name", "what can you do", "help", "who is navibot"}
+        thanks = {"thanks", "thank you", "thanks!", "thank you!", "thx", "awesome", "great"}
+        farewells = {"bye", "goodbye", "see ya", "cya"}
+
+        if q_clean in greetings:
+            return "Hello! 👋 I'm NaviBot, Naveen Prashanna's AI assistant. I can answer questions about Naveen's work experience, software engineering & ML projects, technical skills, education, research papers, or contact details. How can I help you today?"
+        if q_clean in intros:
+            return "I am NaviBot, an AI assistant trained on Naveen Prashanna's professional background, resume, research papers, and software projects. Feel free to ask me anything about Naveen!"
+        if q_clean in thanks:
+            return "You're very welcome! Let me know if you have any other questions about Naveen Prashanna."
+        if q_clean in farewells:
+            return "Goodbye! Feel free to reach out anytime if you have more questions about Naveen."
+
+        return None
+
+    def decompose_and_rewrite_query(
+        self, query: str, history: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Analyzes the query with conversation history context, expands terms,
+        and rewrites vague follow-up questions into standalone search queries.
         """
         if not self.provider_manager.client:
-            return {"rewritten_queries": [query], "is_complex": False}
+            return {"rewritten_queries": [query], "is_complex": False, "is_casual": False}
+
+        history_str = ""
+        if history:
+            recent = history[-6:]
+            formatted_turns = []
+            for m in recent:
+                role = "User" if m.get("role") in ["user", "human"] else "Assistant"
+                formatted_turns.append(f"{role}: {m.get('content', '')}")
+            history_str = "\n".join(formatted_turns)
 
         prompt = f"""
-You are an AI query planning agent for a database containing information about **Naveen Prashanna** (resumes, academic transcripts, research papers, CV).
+You are an AI query contextualization agent for NaviBot, a database assistant for **Naveen Prashanna** (resumes, academic papers, work experience, projects).
 
-Analyze the user query: "{query}"
+Recent Conversation History:
+\"\"\"
+{history_str if history_str else "No prior history."}
+\"\"\"
+
+User's Latest Input: "{query}"
 
 Tasks:
-1. Determine if this query requires multi-step retrieval.
-2. Generate 1 to 3 search-optimized query variations or sub-queries that expand technical terms and synonyms to maximize document recall.
+1. Determine if the user's latest input is a simple greeting, introduction request, or casual remark (e.g., "Hi", "Hello", "Thanks", "Who are you?").
+2. If it is NOT a simple casual remark, analyze whether it relies on conversation history (e.g. "Why is that so?", "Tell me more about it", "What else did he do there?").
+3. Rewrite the latest input into 1 to 3 self-contained, search-optimized query variations that explicitly replace pronouns or ambiguous references with concrete context from history.
 
 Return JSON in this format:
 {{
-  "is_complex": false,
+  "is_casual": false,
+  "casual_reply": "",
   "rewritten_queries": [
-    "search variation 1",
-    "search variation 2"
+    "standalone search query variation 1",
+    "standalone search query variation 2"
   ]
 }}
 """
@@ -60,7 +100,7 @@ Return JSON in this format:
             return json.loads(res_text)
         except Exception as e:
             print(f"⚠️ Query expansion fallback ({e}). Using original query.")
-            return {"rewritten_queries": [query], "is_complex": False}
+            return {"rewritten_queries": [query], "is_complex": False, "is_casual": False}
 
     def verify_faithfulness(self, answer: str, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -103,12 +143,27 @@ Return JSON:
         except Exception:
             return {"is_faithful": True, "score": 1.0, "reason": "Audit bypass."}
 
-    def generate_answer(self, query: str, chunks: List[Dict[str, Any]]) -> str:
-        """Generates answer strictly constrained to context."""
+    def generate_answer(
+        self, query: str, chunks: List[Dict[str, Any]], history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
+        """Generates answer strictly constrained to context, taking conversation history into account."""
         if not chunks:
-            return "I don't have that information in my current knowledge base regarding Naveen Prashanna."
+            return (
+                "I couldn't find specific details matching that in Naveen Prashanna's current records. "
+                "However, I can answer questions about his work experience (e.g. Pharos, UT Dallas), technical skills, "
+                "machine learning & software projects, research papers, or education. Feel free to ask about any of those!"
+            )
 
         context = "\n\n".join([f"Source: [{c.get('source', 'doc')}, p.{c.get('page', 1)}]\n{c['content']}" for c in chunks])
+
+        history_str = ""
+        if history:
+            recent = history[-4:]
+            formatted_turns = []
+            for m in recent:
+                role = "User" if m.get("role") in ["user", "human"] else "Assistant"
+                formatted_turns.append(f"{role}: {m.get('content', '')}")
+            history_str = "\n".join(formatted_turns)
 
         if not self.provider_manager.client:
             summary = "Based on retrieved documents:\n" + "\n".join([f"- {c['content']}" for c in chunks[:3]])
@@ -116,18 +171,20 @@ Return JSON:
 
         prompt = f"""
 # ROLE
-You are an intelligent AI assistant possessing precise knowledge about **Naveen Prashanna**.
+You are NaviBot, an intelligent AI assistant possessing precise knowledge about **Naveen Prashanna**.
+
+# RECENT DIALOGUE HISTORY
+{history_str if history_str else "No prior history."}
 
 # STYLE
 - Refer to Naveen in the third person (Naveen, "he", "his").
 - Address the user directly ("Sure—here's what I found...").
-- Keep answers concise, professional, and technically precise.
+- Keep answers concise, professional, engaging, and technically precise.
 - Cite sources clearly using inline tags like [Resume.pdf, p.1] or [CS6348_Final_Paper.pdf, p.3] where applicable.
 
 # KNOWLEDGE RULES
 - Answer **only** using information in the Context block below.
-- If the context does not contain the answer, reply:
-  "I don't have that information in my current knowledge base."
+- If the context does not contain sufficient details to answer the question, politely state what is known or offer relevant alternatives.
 - Never fabricate details or infer unstated facts.
 
 # CONTEXT
@@ -151,10 +208,16 @@ You are an intelligent AI assistant possessing precise knowledge about **Naveen 
                 summary += f"• **[{c.get('source', 'doc')}]**: {c['content']}\n\n"
             return summary.strip()
 
-    def run(self, query: str, provider: Optional[str] = None, max_retries: int = 1) -> Dict[str, Any]:
+    def run(
+        self,
+        query: str,
+        provider: Optional[str] = None,
+        max_retries: int = 1,
+        history: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
         """
         Executes the full Agentic RAG workflow:
-        Query Rewriting -> Multi-Retrieval -> Reranking -> Draft Generation -> Faithfulness Check -> Output.
+        Casual Intent Check -> Query Rewriting & History Contextualization -> Multi-Retrieval -> Reranking -> Draft Generation -> Faithfulness Check -> Output.
         """
         if provider:
             self.set_provider(provider)
@@ -163,9 +226,39 @@ You are an intelligent AI assistant possessing precise knowledge about **Naveen 
         trace = []
         trace.append(f"Received query: '{query}' (Active LLM Provider: {active_provider.upper()})")
 
-        # Step 1: Query Analysis & Rewriting
-        plan = self.decompose_and_rewrite_query(query)
+        # Step 0: Fast Rule-based Casual Greeting Check
+        rule_reply = self.check_casual_intent(query)
+        if rule_reply:
+            trace.append("Handled via fast casual intent rule.")
+            return {
+                "query": query,
+                "provider": active_provider,
+                "answer": rule_reply,
+                "sources": [],
+                "context_chunks": [],
+                "faithfulness_score": 1.0,
+                "is_faithful": True,
+                "agent_trace": trace
+            }
+
+        # Step 1: Query Analysis & History Contextualized Rewriting
+        plan = self.decompose_and_rewrite_query(query, history=history)
+        if plan.get("is_casual") and plan.get("casual_reply"):
+            trace.append("Handled via LLM casual intent detection.")
+            return {
+                "query": query,
+                "provider": active_provider,
+                "answer": plan["casual_reply"],
+                "sources": [],
+                "context_chunks": [],
+                "faithfulness_score": 1.0,
+                "is_faithful": True,
+                "agent_trace": trace
+            }
+
         rewritten_queries = plan.get("rewritten_queries", [query])
+        if not rewritten_queries:
+            rewritten_queries = [query]
         trace.append(f"Query planning generated {len(rewritten_queries)} search variants: {rewritten_queries}")
 
         # Step 2: Multi-Retrieval via Hybrid Search (Dense + BM25)
@@ -179,11 +272,12 @@ You are an intelligent AI assistant possessing precise knowledge about **Naveen 
         trace.append(f"Retrieved {len(raw_chunks)} candidate chunks via Hybrid Search (Dense + BM25).")
 
         # Step 3: LLM Reranking & Context Relevance Filtering
-        reranked_chunks = self.reranker.rerank(query, raw_chunks, top_n=4, min_score=4.0, provider=active_provider)
+        search_query = rewritten_queries[0] if rewritten_queries else query
+        reranked_chunks = self.reranker.rerank(search_query, raw_chunks, top_n=4, min_score=4.0, provider=active_provider)
         trace.append(f"Reranked context chunks down to {len(reranked_chunks)} high-relevance passages using {active_provider}.")
 
-        # Step 4: Draft Generation
-        answer = self.generate_answer(query, reranked_chunks)
+        # Step 4: Draft Generation with History
+        answer = self.generate_answer(query, reranked_chunks, history=history)
         trace.append(f"Generated draft answer using {active_provider} LLM with context attributions.")
 
         # Step 5: Faithfulness & Self-Correction Check
@@ -210,3 +304,4 @@ You are an intelligent AI assistant possessing precise knowledge about **Naveen 
             "is_faithful": faithfulness.get("is_faithful", True),
             "agent_trace": trace
         }
+

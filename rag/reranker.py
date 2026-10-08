@@ -7,6 +7,19 @@ from rag.llm_provider import LLMProviderManager
 def tokenize_text(text: str) -> List[str]:
     return re.findall(r'\w+', text.lower())
 
+STOP_WORDS = {
+    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'that', 'this', 'these', 'those', 'so', 'why', 'what', 'how', 'who',
+    'where', 'when', 'it', 'its', 'in', 'on', 'at', 'to', 'for', 'of',
+    'and', 'or', 'if', 'because', 'as', 'until', 'while', 'by', 'with',
+    'about', 'against', 'between', 'into', 'through', 'during', 'before',
+    'after', 'above', 'below', 'from', 'up', 'down', 'out', 'off', 'over',
+    'under', 'again', 'further', 'then', 'once', 'here', 'there', 'all',
+    'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some', 'such',
+    'no', 'nor', 'not', 'only', 'own', 'same', 'than', 'too', 'very',
+    's', 't', 'can', 'will', 'just', 'don', 'should', 'now', 'did', 'does'
+}
+
 class LLMReranker:
     """
     Reranks candidate document chunks using LLM relevance scoring to maximize context precision,
@@ -83,8 +96,11 @@ Respond ONLY with a JSON object in this exact format:
             except Exception as e:
                 print(f"⚠️ Reranking LLM call bypassed ({e}). Utilizing local relevance scoring fallback.")
 
-        # Local keyword overlap relevance fallback
-        query_tokens = set(tokenize_text(query))
+        # Local keyword overlap relevance fallback filtering out stop words
+        query_tokens = set(t for t in tokenize_text(query) if t not in STOP_WORDS)
+        if not query_tokens:
+            return []
+
         scored_chunks = []
         for chunk in chunks:
             chunk_copy = dict(chunk)
@@ -92,7 +108,8 @@ Respond ONLY with a JSON object in this exact format:
             matches = sum(1 for t in chunk_tokens if t in query_tokens)
             score = min(10.0, float(matches * 2.5))
             chunk_copy["rerank_score"] = score
-            scored_chunks.append(chunk_copy)
+            if score >= min_score:
+                scored_chunks.append(chunk_copy)
 
         scored_chunks.sort(key=lambda x: x["rerank_score"], reverse=True)
         return scored_chunks[:top_n]

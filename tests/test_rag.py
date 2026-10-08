@@ -65,3 +65,18 @@ def test_health_endpoint():
     assert "active_provider" in data
     assert "vllm_base_url" in data
     assert data["total_bm25_chunks"] > 0
+
+def test_greeting_and_history_query():
+    # Test casual greeting intent
+    resp_greeting = client.post("/query", json={"query": "Hi", "provider": "openai"})
+    assert resp_greeting.status_code == 200
+    data_g = resp_greeting.json()
+    assert "NaviBot" in data_g["answer"]
+    assert "Handled via fast casual intent rule." in data_g["agent_trace"]
+
+    # Test vague query with stop-words returns clean message (no raw chunk blurting)
+    resp_vague = client.post("/query", json={"query": "Why is that so?", "provider": "openai"})
+    assert resp_vague.status_code == 200
+    data_v = resp_vague.json()
+    assert "CS6348_Final_Paper.pdf" not in data_v["answer"] or "couldn't find" in data_v["answer"].lower() or "records" in data_v["answer"].lower()
+

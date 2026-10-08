@@ -41,6 +41,7 @@ class QueryRequest(BaseModel):
     agentic: bool = Field(default=True, description="Enable full agentic pipeline with query rewriting, reranking, and self-correction.")
     provider: Optional[str] = Field(default=None, description="LLM provider switch: 'openai' or 'vllm' / 'local'. Defaults to LLM_PROVIDER env.")
     max_retries: int = Field(default=1, description="Max self-correction retry attempts.")
+    history: Optional[List[Dict[str, str]]] = Field(default=[], description="Previous conversation turns [{'role': 'user'|'assistant', 'content': '...'}]")
 
 class QueryResponse(BaseModel):
     query: str
@@ -85,7 +86,12 @@ def handle_query(req: QueryRequest):
 
     try:
         if req.agentic:
-            result = agentic_engine.run(query=req.query, provider=req.provider, max_retries=req.max_retries)
+            result = agentic_engine.run(
+                query=req.query,
+                provider=req.provider,
+                max_retries=req.max_retries,
+                history=req.history
+            )
             return QueryResponse(
                 query=result["query"],
                 provider=result.get("provider", provider_manager.provider),
@@ -100,7 +106,7 @@ def handle_query(req: QueryRequest):
             p = req.provider or provider_manager.provider
             provider_manager.set_provider(p)
             chunks = retriever.hybrid_search(req.query, top_k=4)
-            answer = agentic_engine.generate_answer(req.query, chunks)
+            answer = agentic_engine.generate_answer(req.query, chunks, history=req.history)
             sources = list(set([c.get("source", "unknown") for c in chunks]))
             return QueryResponse(
                 query=req.query,
