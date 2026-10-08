@@ -79,7 +79,7 @@ User's Latest Input: "{query}"
 Tasks:
 1. Determine if the user's latest input is a simple greeting, introduction request, or casual remark (e.g., "Hi", "Hello", "Thanks", "Who are you?").
 2. If it is NOT a simple casual remark, analyze whether it relies on conversation history (e.g. "Why is that so?", "Tell me more about it", "What else did he do there?").
-3. Rewrite the latest input into 1 to 3 self-contained, search-optimized query variations that explicitly replace pronouns or ambiguous references with concrete context from history.
+3. Rewrite the latest input into 2 to 4 self-contained, search-optimized query variations for document retrieval. If the user asks broadly about work experience, employment history, or companies, explicitly include search queries for all 4 positions: Pharvision Advisers, Kahana Group Inc, Quantitative Brokers, and Big Data Science Research.
 
 Return JSON in this format:
 {{
@@ -87,7 +87,8 @@ Return JSON in this format:
   "casual_reply": "",
   "rewritten_queries": [
     "standalone search query variation 1",
-    "standalone search query variation 2"
+    "standalone search query variation 2",
+    "standalone search query variation 3"
   ]
 }}
 """
@@ -150,8 +151,8 @@ Return JSON:
         if not chunks:
             return (
                 "I couldn't find specific details matching that in Naveen Prashanna's current records. "
-                "However, I can answer questions about his work experience (e.g. Pharos, UT Dallas), technical skills, "
-                "machine learning & software projects, research papers, or education. Feel free to ask about any of those!"
+                "However, I can answer questions about his work experience across Pharvision Advisers, Kahana Group, "
+                "Quantitative Brokers, and Big Data Science Research, or his technical skills, ML projects, research papers, and education."
             )
 
         context = "\n\n".join([f"Source: [{c.get('source', 'doc')}, p.{c.get('page', 1)}]\n{c['content']}" for c in chunks])
@@ -166,25 +167,27 @@ Return JSON:
             history_str = "\n".join(formatted_turns)
 
         if not self.provider_manager.client:
-            summary = "Based on retrieved documents:\n" + "\n".join([f"- {c['content']}" for c in chunks[:3]])
+            summary = "Based on retrieved documents:\n" + "\n".join([f"- {c['content']}" for c in chunks[:4]])
             return summary
 
         prompt = f"""
 # ROLE
-You are NaviBot, an intelligent AI assistant possessing precise knowledge about **Naveen Prashanna**.
+You are NaviBot, a knowledgeable, warm, and professional AI assistant representing **Naveen Prashanna**.
 
 # RECENT DIALOGUE HISTORY
 {history_str if history_str else "No prior history."}
 
-# STYLE
+# TONE & STYLE
+- Speak in a natural, direct, engaging human tone.
+- **NEVER** start your answer with robotic boilerplate prefixes like "Sure—here's what I found..." or "Here is what I found about...". Jump straight into answering naturally.
 - Refer to Naveen in the third person (Naveen, "he", "his").
-- Address the user directly ("Sure—here's what I found...").
-- Keep answers concise, professional, engaging, and technically precise.
-- Cite sources clearly using inline tags like [Resume.pdf, p.1] or [CS6348_Final_Paper.pdf, p.3] where applicable.
+- Format responses clearly with clean bullet points, bold key terms, and structured sections.
+- When asked about Naveen's work history or positions, ensure ALL 4 of his positions present in context (Pharvision Advisers, Kahana Group Inc, Quantitative Brokers, Big Data Science Research) are accurately listed without missing any.
+- Cite sources naturally using inline tags like [NaveenPrashanna_Resume.pdf] or [experience_kahana_group.md] where applicable.
 
 # KNOWLEDGE RULES
-- Answer **only** using information in the Context block below.
-- If the context does not contain sufficient details to answer the question, politely state what is known or offer relevant alternatives.
+- Answer using information in the Context block below.
+- If context does not contain full details, politely state what is known or ask for clarification.
 - Never fabricate details or infer unstated facts.
 
 # CONTEXT
@@ -203,8 +206,8 @@ You are NaviBot, an intelligent AI assistant possessing precise knowledge about 
             return answer
         except Exception as e:
             print(f"⚠️ LLM generation call failed ({e}). Returning extracted context fallback.")
-            summary = f"Sure—here's what I found about '{query}' in Naveen Prashanna's records:\n\n"
-            for c in chunks[:3]:
+            summary = ""
+            for c in chunks[:4]:
                 summary += f"• **[{c.get('source', 'doc')}]**: {c['content']}\n\n"
             return summary.strip()
 
@@ -264,7 +267,7 @@ You are NaviBot, an intelligent AI assistant possessing precise knowledge about 
         # Step 2: Multi-Retrieval via Hybrid Search (Dense + BM25)
         raw_chunks_map = {}
         for q_var in rewritten_queries:
-            results = self.retriever.hybrid_search(q_var, top_k=6, fetch_k=15)
+            results = self.retriever.hybrid_search(q_var, top_k=10, fetch_k=20)
             for item in results:
                 raw_chunks_map[item["id"]] = item
 
@@ -273,7 +276,7 @@ You are NaviBot, an intelligent AI assistant possessing precise knowledge about 
 
         # Step 3: LLM Reranking & Context Relevance Filtering
         search_query = rewritten_queries[0] if rewritten_queries else query
-        reranked_chunks = self.reranker.rerank(search_query, raw_chunks, top_n=4, min_score=4.0, provider=active_provider)
+        reranked_chunks = self.reranker.rerank(search_query, raw_chunks, top_n=6, min_score=3.0, provider=active_provider)
         trace.append(f"Reranked context chunks down to {len(reranked_chunks)} high-relevance passages using {active_provider}.")
 
         # Step 4: Draft Generation with History
