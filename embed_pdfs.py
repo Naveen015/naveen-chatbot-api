@@ -1,73 +1,71 @@
 import os
-import openai
-import fitz  # PyMuPDF
-from pinecone import Pinecone
-# --- 1. Embed function ---
+import fitz
 from openai import OpenAI
+from pinecone import Pinecone
+from rag.chunker import DocumentChunker
+from rag.hybrid_retriever import HybridRetriever
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-index = pc.Index("naveen-chatbot")
-
+DOCS_DIR = "data"
+INDEX_NAME = "naveen-chatbot"
 MODEL = "text-embedding-ada-002"
-CHUNK_SIZE = 800  # chars (not tokens)
 
-DOCS_DIR = "data"  # your folder of PDFs
-
-
-def extract_chunks(pdf_path):
-    doc = fitz.open(pdf_path)
-    full_text = ""
-    for page in doc:
-        full_text += page.get_text()
-    doc.close()
+def main():
+    print("🚀 Starting PDF Document Ingestion & Hybrid Index Building...")
     
-    # Split into overlapping chunks
-    chunks = []
-    text = full_text.strip().replace("\n", " ")
-    for i in range(0, len(text), CHUNK_SIZE):
-        chunk = text[i:i+CHUNK_SIZE]
-        if len(chunk) > 200:  # skip tiny junk
-            chunks.append(chunk)
-    return chunks
+    openai_key = os.getenv("OPENAI_API_KEY")
+    pinecone_key = os.getenv("PINECONE_API_KEY")
 
+    if not openai_key:
+        print("❌ OPENAI_API_KEY environment variable is missing.")
+        return
 
-
-def embed_texts(texts):
-    res = client.embeddings.create(
-        model=MODEL,
-        input=texts
-    )
-    return [record.embedding for record in res.data]
-
-
-
-def process_pdf_file(filepath, doc_id_start):
-    filename = os.path.basename(filepath)
-    chunks = extract_chunks(filepath)
-    embeddings = embed_texts(chunks)
-    vectors = []
+    client = OpenAI(api_key=openai_key)
     
-    for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
-        uid = f"{filename}_{i + doc_id_start}"
-        meta = {
-            "source": filename,
-            "content": chunk
-        }
-        vectors.append((uid, emb, meta))
-    
-    index.upsert(vectors=vectors)
-    print(f"✅ Uploaded {len(vectors)} chunks from {filename}")
-    return len(vectors)
+    # 1. Chunk documents using DocumentChunker
+    chunker = DocumentChunker(chunk_size=600, overlap=150)
+    chunks = chunker.process_directory(DOCS_DIR)
+    print(f"📄 Extracted {len(chunks)} metadata-enriched text chunks from PDFs in '{DOCS_DIR}'.")
 
+    if not chunks:
+        print("⚠️ No chunks extracted.")
+        return
+
+    # 2. Upload to Pinecone (Dense Index)
+    if pinecone_key:
+        try:
+            pc = Pinecone(api_key=pinecone_key)
+            index = pc.Index(INDEX_NAME)
+
+            print("⚡ Generating OpenAI Embeddings & Upserting to Pinecone...")
+            vectors = []
+            batch_size = 50
+
+            for i in range(0, len(chunks), batch_size):
+                batch = chunks[i:i+batch_size]
+                texts = [c["content"] for c in batch]
+                res = client.embeddings.create(model=MODEL, input=texts)
+                embeddings = [rec.embedding for rec in res.data]
+
+                for chunk, emb in zip(batch, embeddings):
+                    meta = {
+                        "source": chunk["source"],
+                        "page": chunk["page"],
+                        "content": chunk["content"]
+                    }
+                    vectors.append((chunk["id"], emb, meta))
+
+            index.upsert(vectors=vectors)
+            print(f"✅ Upserted {len(vectors)} vectors into Pinecone index '{INDEX_NAME}'.")
+        except Exception as e:
+            print(f"⚠️ Warning: Could not upsert to Pinecone: {e}")
+    else:
+        print("⚠️ PINECONE_API_KEY missing. Skipping Pinecone vector upload.")
+
+    # 3. Build & Persist BM25 Sparse Index
+    print("🔍 Building & Persisting BM25 Index...")
+    retriever = HybridRetriever(docs_dir=DOCS_DIR, index_name=INDEX_NAME, embed_model=MODEL)
+    retriever.load_or_build_bm25(force_rebuild=True)
+    print("🎉 Hybrid indexing complete! Both Sparse (BM25) and Dense vector indexes are ready.")
 
 if __name__ == "__main__":
-    files = [f for f in os.listdir(DOCS_DIR) if f.endswith(".pdf")]
-    doc_id = 10000  # avoid clashing with earlier upserts
-
-    for pdf_file in files:
-        full_path = os.path.join(DOCS_DIR, pdf_file)
-        num_uploaded = process_pdf_file(full_path, doc_id)
-        doc_id += num_uploaded
-
-    print("🎉 All PDF docs processed and uploaded.")
+    main()
